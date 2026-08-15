@@ -5,12 +5,37 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import models
 import schemas
-from database import engine, get_db
-
-# 自动创建表
-models.Base.metadata.create_all(bind=engine)
+import database
 
 app = FastAPI()
+
+# 在启动事件中尝试创建表（带重试），避免在应用导入时因 DB 暂不可达导致程序直接崩溃
+import time
+import logging
+
+@app.on_event("startup")
+def startup_event():
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            models.Base.metadata.create_all(bind=database.engine)
+            logging.info("Database tables ensured on startup")
+            break
+        except Exception as e:
+            msg = str(e)
+            logging.exception("Database unavailable on startup (attempt %s/%s): %s", attempt, max_retries, e)
+            # 如果因网络不可达并且看起来是 IPv6 问题，尝试 IPv4 回退一次
+            if "Network is unreachable" in msg and attempt == 1:
+                logging.info("Detected network unreachable; attempting IPv4 fallback")
+                database.replace_engine_with_ipv4()
+                # 重试立即进行（不增加延迟）
+                continue
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+            else:
+                logging.error("Could not connect to database after %s attempts; continuing without DB initialization", max_retries)
 
 # 核心：配置允许跨域访问的白名单
 app.add_middleware(
@@ -29,7 +54,7 @@ def read_root():
 # 标签 (Tags) API
 # ==========================
 @app.post("/api/tags", response_model=schemas.TagResponse)
-def create_tag(tag: schemas.TagCreate, db: Session = Depends(get_db)):
+def create_tag(tag: schemas.TagCreate, db: Session = Depends(database.get_db)):
     db_tag = models.Tag(name=tag.name, category=tag.category, color=tag.color, parent_id=tag.parent_id)
     db.add(db_tag)
     db.commit()          # 提交到数据库
@@ -37,14 +62,14 @@ def create_tag(tag: schemas.TagCreate, db: Session = Depends(get_db)):
     return db_tag
 
 @app.get("/api/tags", response_model=List[schemas.TagResponse])
-def get_tags(db: Session = Depends(get_db)):
+def get_tags(db: Session = Depends(database.get_db)):
     return db.query(models.Tag).all()
 
 # ==========================
 # 笔记 (Notes) API
 # ==========================
 @app.post("/api/notes", response_model=schemas.NoteResponse)
-def create_note(note: schemas.NoteCreate, db: Session = Depends(get_db)):
+def create_note(note: schemas.NoteCreate, db: Session = Depends(database.get_db)):
     # 1. 创建笔记本身（包含空间地理坐标）
     db_note = models.Note(
         title=note.title,
@@ -67,11 +92,11 @@ def create_note(note: schemas.NoteCreate, db: Session = Depends(get_db)):
     return db_note
 
 @app.get("/api/notes", response_model=List[schemas.NoteResponse])
-def get_notes(db: Session = Depends(get_db)):
+def get_notes(db: Session = Depends(database.get_db)):
     return db.query(models.Note).all()
 
 @app.delete("/api/notes/{note_id}")
-def delete_note(note_id: int, db: Session = Depends(get_db)):
+def delete_note(note_id: int, db: Session = Depends(database.get_db)):
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if not db_note:
         raise HTTPException(status_code=404, detail="笔记不存在")
@@ -81,7 +106,7 @@ def delete_note(note_id: int, db: Session = Depends(get_db)):
 
 # 2. 更新笔记（包含修改心得和坐标等）
 @app.put("/api/notes/{note_id}", response_model=schemas.NoteResponse)
-def update_note(note_id: int, note_update: schemas.NoteCreate, db: Session = Depends(get_db)):
+def update_note(note_id: int, note_update: schemas.NoteCreate, db: Session = Depends(database.get_db)):
     db_note = db.query(models.Note).filter(models.Note.id == note_id).first()
     if not db_note:
         raise HTTPException(status_code=404, detail="笔记不存在")
