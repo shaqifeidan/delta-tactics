@@ -1,8 +1,24 @@
-from sqlalchemy.orm import Session
-from database import engine, SessionLocal
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
+
+# 加载本地可能存在的 .env 文件（如果有的的话）
+load_dotenv()
+
 import models
 
-# 你的战术字典数据结构
+# 核心：自动识别环境变量中的云端数据库地址，如果没有则退回本地 SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./delta_notes.db")
+
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# 你的完整战术字典数据结构
 INITIAL_TAGS = {
     "MAP": {
         "零号大坝": ["管道区域", "军营", "行政辖区", "水泥厂", "大小变电站", "游客中心", "野外区域"],
@@ -21,28 +37,33 @@ INITIAL_TAGS = {
 def init_db_tags():
     db = SessionLocal()
     try:
-        # 清空旧标签（防止重复执行）
-        db.query(models.Tag).delete()
+        print("🔄 正在检查并初始化云端战术字典...")
         
-        # 遍历插入数据
+        # 遍历插入数据（采用增量或覆盖逻辑）
         for category, parent_dict in INITIAL_TAGS.items():
             for parent_name, children_names in parent_dict.items():
-                # 1. 创建父级标签 (大地图/大分类)
-                parent_tag = models.Tag(name=parent_name, category=category, color="#4F46E5")
-                db.add(parent_tag)
-                db.commit()
-                db.refresh(parent_tag)
                 
-                # 2. 创建子级标签 (具体区域/具体操作)
+                # 检查父标签是否已存在（避免重复多次运行脚本导致报错）
+                parent_tag = db.query(models.Tag).filter_by(name=parent_name, category=category).first()
+                if not parent_tag:
+                    parent_tag = models.Tag(name=parent_name, category=category, color="#4F46E5")
+                    db.add(parent_tag)
+                    db.commit()
+                    db.refresh(parent_tag)
+                
+                # 遍历子级标签
                 for child_name in children_names:
-                    child_tag = models.Tag(
-                        name=child_name, 
-                        category=category, 
-                        parent_id=parent_tag.id, # 绑定父级 ID
-                        color="#10B981"
-                    )
-                    db.add(child_tag)
+                    existing_child = db.query(models.Tag).filter_by(name=child_name, parent_id=parent_tag.id).first()
+                    if not existing_child:
+                        child_tag = models.Tag(
+                            name=child_name, 
+                            category=category, 
+                            parent_id=parent_tag.id, 
+                            color="#10B981"
+                        )
+                        db.add(child_tag)
                 db.commit()
+                
         print("✅ 战术字典初始化注入成功！")
     except Exception as e:
         print(f"❌ 注入失败: {e}")
@@ -51,6 +72,5 @@ def init_db_tags():
         db.close()
 
 if __name__ == "__main__":
-    # 确保表已经创建
     models.Base.metadata.create_all(bind=engine)
     init_db_tags()

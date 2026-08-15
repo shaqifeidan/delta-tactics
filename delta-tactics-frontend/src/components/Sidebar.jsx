@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 
-axios.defaults.baseURL = 'http://127.0.0.1:8000';
+// 核心修改：如果 Vercel 环境变量存在则用云端地址，否则本地开发时用 127.0.0.1
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function Sidebar({ onFilterChange, refreshTrigger }) {
   const [tags, setTags] = useState([]);

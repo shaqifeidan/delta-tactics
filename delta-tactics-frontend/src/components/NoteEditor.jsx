@@ -3,7 +3,8 @@ import CreatableSelect from 'react-select/creatable';
 import axios from 'axios';
 import InteractiveMap from './InteractiveMap'; // 引入我们刚刚写好的战术地图组件
 
-axios.defaults.baseURL = 'http://127.0.0.1:8000';
+// 核心修改：如果 Vercel 环境变量存在则用云端地址，否则本地开发时用 127.0.0.1
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function NoteEditor({ onNoteAdded }) {
   const [title, setTitle] = useState('');
