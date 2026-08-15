@@ -10,15 +10,15 @@ from database import engine, get_db
 # 自动创建表
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Delta Tactics API")
+app = FastAPI()
 
-# CORS 配置区
+# 核心：配置允许跨域访问的白名单
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # 允许前端测试服访问
+    allow_origins=["*"],  # 生产环境也可以写具体的前端网址，开发测试用 ["*"] 最省心
     allow_credentials=True,
-    allow_methods=["*"], # 允许 GET, POST, PUT, DELETE 等所有方法
-    allow_headers=["*"],
+    allow_methods=["*"],  # 允许所有请求方法 (GET, POST 等)
+    allow_headers=["*"],  # 允许所有请求头
 )
 
 @app.get("/")
