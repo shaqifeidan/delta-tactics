@@ -39,12 +39,41 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+
+
 def get_db():
-    db = SessionLocal()
+    """Yield a DB session. On OperationalError caused by network/IPv6 issues,
+    attempt IPv4 fallback once and retry.
+    """
+    global SessionLocal
+    session = None
     try:
-        yield db
+        session = SessionLocal()
+        # force a quick test query to surface connection issues early
+        session.execute(text("SELECT 1"))
+        yield session
+    except OperationalError as e:
+        msg = str(e)
+        logging.exception("DB OperationalError when acquiring session: %s", e)
+        # If network unreachable (likely IPv6 problem) or operator forced IPv4, try fallback
+        if ("Network is unreachable" in msg) or (os.getenv("FORCE_IPV4", "").lower() == "true"):
+            logging.info("Attempting IPv4 fallback due to DB OperationalError or FORCE_IPV4")
+            replace_engine_with_ipv4()
+            # rebuild session with new SessionLocal
+            session = SessionLocal()
+            # try test query again to raise if still failing
+            session.execute(text("SELECT 1"))
+            yield session
+        else:
+            raise
     finally:
-        db.close()
+        if session:
+            try:
+                session.close()
+            except Exception:
+                pass
 
 
 # IPv4 回退逻辑

@@ -50,15 +50,29 @@ app.add_middleware(
 def read_root():
     return {"message": "Welcome to Delta Tactics Vault!"}
 
+# 健康检查端点：快速检测数据库连通性
+from sqlalchemy import text
+
+@app.get("/health")
+def health():
+    try:
+        with database.engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception as e:
+        logging.exception("Health check DB failed: %s", e)
+        raise HTTPException(status_code=503, detail="database unreachable")
+
 # ==========================
 # 标签 (Tags) API
 # ==========================
 @app.post("/api/tags", response_model=schemas.TagResponse)
 def create_tag(tag: schemas.TagCreate, db: Session = Depends(database.get_db)):
-    db_tag = models.Tag(name=tag.name, category=tag.category, color=tag.color, parent_id=tag.parent_id)
+    # 创建标签（models.Tag 不包含 parent_id，目前只保存 name, category, color）
+    db_tag = models.Tag(name=tag.name, category=tag.category, color=tag.color)
     db.add(db_tag)
-    db.commit()          # 提交到数据库
-    db.refresh(db_tag)   # 刷新以获取自动生成的 ID
+    db.commit()
+    db.refresh(db_tag)
     return db_tag
 
 @app.get("/api/tags", response_model=List[schemas.TagResponse])
@@ -70,22 +84,20 @@ def get_tags(db: Session = Depends(database.get_db)):
 # ==========================
 @app.post("/api/notes", response_model=schemas.NoteResponse)
 def create_note(note: schemas.NoteCreate, db: Session = Depends(database.get_db)):
-    # 1. 创建笔记本身（包含空间地理坐标）
+    # 创建笔记（Note 模型目前包含 title, context, action, takeaway, is_starred）
     db_note = models.Note(
         title=note.title,
         context=note.context,
+        action=note.action,
         takeaway=note.takeaway,
-        is_starred=note.is_starred,
-        map_name=note.map_name,
-        coord_x=note.coord_x,
-        coord_y=note.coord_y
+        is_starred=note.is_starred
     )
-    
-    # 2. 如果前端传了标签 ID，绑定这些标签
+
+    # 绑定标签（如果提供）
     if note.tag_ids:
         tags = db.query(models.Tag).filter(models.Tag.id.in_(note.tag_ids)).all()
         db_note.tags = tags
-        
+
     db.add(db_note)
     db.commit()
     db.refresh(db_note)
